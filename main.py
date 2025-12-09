@@ -1,104 +1,164 @@
 from kivy.app import App
 from kivy.uix.boxlayout import BoxLayout
-from kivy.uix.textinput import TextInput
 from kivy.uix.button import Button
-from kivy.uix.settings import SettingsWithSidebar
-from kivy.config import ConfigParser
+from kivy.uix.textinput import TextInput
+from kivy.uix.label import Label
+from kivy.properties import NumericProperty
+from kivy.core.window import Window
+from kivy.uix.settings import Settings
+import io
+import sys
 
-from kivy.uix.codeinput import CodeInput
-from pygments.lexers import PythonLexer
-
-
-class PythonIDE(BoxLayout):
-    def __init__(self, **kwargs):
-        super().__init__(orientation="vertical", **kwargs)
-
-        app = App.get_running_app()
-
-        # Editor mit Syntax Highlighting
-        self.editor = CodeInput(
-            lexer=PythonLexer(),
-            tab_width=4,
-            font_size=16,
-            size_hint_y=0.65,
-            auto_indent=True,
-            keyboard_mode="managed" if app.use_internal_keyboard else "system",
-        )
-        self.editor.text = "# Schreibe deinen Python-Code hier\nprint('Hallo Ben!')"
-        self.add_widget(self.editor)
-
-        # Ausgabe-Feld
-        self.output = TextInput(
-            text="Ausgabe erscheint hier...",
-            multiline=True,
-            readonly=True,
-            font_size=16,
-            size_hint_y=0.25
-        )
-        self.add_widget(self.output)
-
-        # RUN-Button
-        run_button = Button(
-            text="Code ausführen",
-            size_hint_y=0.15,
-            font_size=20
-        )
-        run_button.bind(on_press=self.run_code)
-        self.add_widget(run_button)
-
-    def run_code(self, *_):
-        import sys, io
-
-        code = self.editor.text
-        backup = sys.stdout
-        sys.stdout = io.StringIO()
-
-        try:
-            exec(code, {})
-            output = sys.stdout.getvalue()
-        except Exception as e:
-            output = "Fehler:\n" + str(e)
-
-        sys.stdout = backup
-        self.output.text = output
+Window.clearcolor = (0.85, 0.95, 0.90, 1)
 
 
-class PythonIDEApp(App):
-
-    use_internal_keyboard = True
+class BenacondaApp(App):
+    editor_font_size = NumericProperty(16)
+    output_font_size = NumericProperty(16)
 
     def build(self):
-        self.settings_cls = SettingsWithSidebar()
-        return PythonIDE()
+        self.settings_cls = Settings
 
+        root = BoxLayout(orientation='vertical', spacing=5, padding=5)
+
+        # ------------------------------
+        # TOP-BAR mit Settings Icon
+        # ------------------------------
+        top_bar = BoxLayout(orientation='horizontal', size_hint_y=None, height=50)
+        top_bar.add_widget(Label(size_hint_x=1))
+
+        settings_button = Button(
+            text="⚙",
+            font_size=24,
+            size_hint=(None, None),
+            size=(50, 50)
+        )
+        settings_button.bind(on_press=lambda x: self.open_settings())
+        top_bar.add_widget(settings_button)
+
+        # ------------------------------
+        # EDITOR
+        # ------------------------------
+        self.editor = TextInput(
+            multiline=True,
+            font_size=self.editor_font_size,
+            size_hint_y=1,
+            hint_text="Python-Code hier eingeben..."
+        )
+
+        # ------------------------------
+        # RUN BUTTON
+        # ------------------------------
+        run_button = Button(
+            text="Code ausführen",
+            height=60,
+            size_hint_y=None,
+            font_size=18
+        )
+        run_button.bind(on_press=self.run_code)
+
+        # ------------------------------
+        # OUTPUT – versteckt am Anfang
+        # ------------------------------
+        self.output = TextInput(
+            multiline=True,
+            readonly=True,
+            font_size=self.output_font_size,
+            size_hint_y=0.5,
+            opacity=0
+        )
+        self.output_visible = False
+
+        self.output.bind(on_touch_down=self.hide_output)
+        Window.bind(on_key_down=self.key_handler)
+
+        root.add_widget(top_bar)
+        root.add_widget(self.editor)
+        root.add_widget(run_button)
+        root.add_widget(self.output)
+
+        return root
+
+    # ------------------------------
+    # OUTPUT EIN-/AUSBLENDEN
+    # ------------------------------
+    def show_output(self):
+        self.output.opacity = 1
+        self.output_visible = True
+
+    def hide_output(self, *args):
+        self.output.opacity = 0
+        self.output.text = ""
+        self.output_visible = False
+
+    def key_handler(self, window, key, scancode, codepoint, modifiers):
+        # "Back" auf Android
+        if key == 27:
+            if self.output_visible:
+                self.hide_output()
+            else:
+                App.get_running_app().stop()
+            return True
+
+    # ------------------------------
+    # CODE AUSFÜHREN
+    # ------------------------------
+    def run_code(self, instance):
+        code = self.editor.text
+
+        # saubere Umgebung für exec
+        local_env = {}
+
+        temp_out = io.StringIO()
+        old_stdout = sys.stdout
+        sys.stdout = temp_out
+
+        try:
+            exec(code, {"__builtins__": __builtins__}, local_env)
+            result = temp_out.getvalue()
+        except Exception as e:
+            result = f"Fehler: {e}"
+        finally:
+            sys.stdout = old_stdout
+
+        self.output.text = result or "(keine Ausgabe)"
+        self.show_output()
+
+    # ------------------------------
+    # SETTINGS
+    # ------------------------------
     def build_config(self, config):
-        config.setdefaults("keyboard", {
-            "use_internal": True
+        config.setdefaults("fonts", {
+            "editor_font": 16,
+            "output_font": 16
         })
 
     def build_settings(self, settings):
-        settings.add_json_panel(
-            "Einstellungen",
-            self.config,
-            data="""
-            [
-                {
-                    "type": "bool",
-                    "title": "Interne Handy-Tastatur benutzen",
-                    "desc": "Wenn deaktiviert → nur externe Tastatur.",
-                    "section": "keyboard",
-                    "key": "use_internal"
-                }
-            ]
-            """
-        )
+        json_settings = """
+[
+    {
+        "type": "numeric",
+        "title": "Schriftgröße Editor",
+        "section": "fonts",
+        "key": "editor_font"
+    },
+    {
+        "type": "numeric",
+        "title": "Schriftgröße Ausgabe",
+        "section": "fonts",
+        "key": "output_font"
+    }
+]
+"""
+        settings.add_json_panel("Einstellungen", self.config, data=json_settings)
 
     def on_config_change(self, config, section, key, value):
-        if section == "keyboard" and key == "use_internal":
-            self.use_internal_keyboard = value == "1"
-            self.stop()
-            self.run()
+        # Schriftgrößen LIVE aktualisieren
+        if section == "fonts" and key == "editor_font":
+            self.editor.font_size = int(value)
+        if section == "fonts" and key == "output_font":
+            self.output.font_size = int(value)
 
 
 if __name__ == "__main__":
-    PythonIDEApp().run()
+    BenacondaApp().run()
